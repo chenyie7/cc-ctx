@@ -1,0 +1,14 @@
+{
+  "name": "cc-ctx",
+  "version": "0.1.0",
+  "description": "Claude Code statusline: context, tokens, cache hit rate, session cost and DeepSeek balance",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test 'test/*.test.js'"
+  },
+  "license": "MIT"
+}

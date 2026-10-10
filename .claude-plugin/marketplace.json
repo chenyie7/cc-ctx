@@ -1,0 +1,16 @@
+{
+  "name": "cc-ctx-marketplace",
+  "owner": {
+    "name": "chenyie7"
+  },
+  "description": "Claude Code session telemetry: context, tokens, cache hit rate, cost and balance.",
+  "plugins": [
+    {
+      "name": "cc-ctx",
+      "source": "./",
+      "description": "Status line showing context usage, token breakdown, cache hit rate, session cost and provider balance",
+      "category": "observability",
+      "tags": ["statusline", "context", "cost", "tokens"]
+    }
+  ]
+}

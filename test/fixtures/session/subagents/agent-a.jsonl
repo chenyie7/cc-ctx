@@ -1,0 +1,2 @@
+{"isSidechain":true,"timestamp":"2026-09-30T02:30:00.000Z","type":"assistant","message":{"id":"msg_sub","model":"subagent-model","usage":{"input_tokens":7,"cache_read_input_tokens":70,"output_tokens":9}}}
+{"isSidechain":true,"timestamp":"2026-09-30T02:30:01.000Z","type":"assistant","message":{"id":"msg_sub","model":"subagent-model","usage":{"input_tokens":7,"cache_read_input_tokens":70,"output_tokens":9}}}

@@ -1,0 +1,14 @@
+{
+  "name": "cc-ctx",
+  "displayName": "cc-ctx",
+  "version": "0.1.0",
+  "description": "Status line showing context usage, token breakdown, cache hit rate, session cost and provider balance",
+  "author": {
+    "name": "chenyie7"
+  },
+  "repository": "https://github.com/chenyie7/cc-ctx",
+  "homepage": "https://github.com/chenyie7/cc-ctx#readme",
+  "license": "MIT",
+  "keywords": ["statusline", "context", "cost", "tokens", "deepseek"],
+  "defaultEnabled": true
+}

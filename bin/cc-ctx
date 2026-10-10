@@ -1,0 +1,58 @@
+#!/bin/sh
+# cc-ctx — locate a Node runtime, then exec the CLI.
+#
+# Node is frequently installed through a version manager (nvm, fnm, asdf,
+# volta), whose PATH entries are added by an interactive shell's rc file.
+# Claude Code runs statusLine in a minimal, non-interactive environment, so
+# `node` is often not on PATH there. Resolve it ourselves rather than
+# requiring the user to hard-code an absolute path.
+
+set -u
+
+find_node() {
+    # 1. Whatever PATH already offers.
+    if command -v node >/dev/null 2>&1; then
+        command -v node
+        return 0
+    fi
+
+    # 2. Version-manager and system locations, newest version first.
+    matches=""
+    for pattern in \
+        "$HOME/.nvm/versions/node/*/bin/node" \
+        "$HOME/.local/share/fnm/node-versions/*/installation/bin/node" \
+        "$HOME/.asdf/installs/nodejs/*/bin/node" \
+        "$HOME/.local/share/mise/installs/node/*/bin/node" \
+        "$HOME/.volta/bin/node" \
+        /opt/homebrew/bin/node \
+        /usr/local/bin/node \
+        /usr/bin/node
+    do
+        for candidate in $pattern; do
+            [ -x "$candidate" ] && matches="$matches$candidate
+"
+        done
+    done
+
+    [ -n "$matches" ] || return 1
+    printf '%s' "$matches" | sed '/^$/d' | sort -V | tail -n 1
+}
+
+NODE_BIN=$(find_node) || {
+    echo "cc-ctx: node not found — install Node.js 18+ or add it to PATH" >&2
+    exit 1
+}
+
+# Resolve this script's real location, following symlinks, so the CLI is found
+# whether invoked from the plugin directory or via ~/.local/bin/cc-ctx.
+SELF=$0
+while [ -L "$SELF" ]; do
+    LINK=$(readlink "$SELF")
+    case $LINK in
+        /*) SELF=$LINK ;;
+        *) SELF=$(dirname "$SELF")/$LINK ;;
+    esac
+done
+ROOT=$(cd "$(dirname "$SELF")/.." && pwd)
+
+exec "$NODE_BIN" "$ROOT/src/cli.js" "$@"
