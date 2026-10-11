@@ -1,9 +1,11 @@
-// 节假日日历：内置快照 / 远程缓存 / 用户文件三级合并。
+// Holiday calendar: merges a bundled snapshot, a remote cache, and user files,
+// in that priority order.
 //
-// 两个格式都要认：
-//   - 本项目的原生格式 { id, tz, years: { "2026": { holidays, workdays } } }
-//   - NateScarlet/holiday-cn 的 { year, days: [{ date, isOffDay }] }
-// 日期一律是「当地自然日」的 YYYY-MM-DD，节假日在中国的语境下即北京时间。
+// Two on-disk formats are recognised:
+//   - this project's native { id, tz, years: { "2026": { holidays, workdays } } }
+//   - NateScarlet/holiday-cn's { year, days: [{ date, isOffDay }] }
+// Dates are always local calendar days in YYYY-MM-DD; for China a holiday means
+// Beijing time.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,7 +15,7 @@ export const DEFAULT_CALENDAR_TZ = 'Asia/Shanghai';
 
 const DAY_MS = 86400000;
 
-/** "YYYY-MM-DD" -> UTC 零点的毫秒数；非法返回 null。 */
+/** "YYYY-MM-DD" -> milliseconds at UTC midnight; null when invalid. */
 function dayMs(text) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(text ?? '').trim());
   if (!m) return null;
@@ -25,7 +27,7 @@ function dayKey(ms) {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-/** 把 "YYYY-MM-DD" 与 { from, to } 混排的列表展开成日期集合。 */
+/** Expands a list mixing "YYYY-MM-DD" and { from, to } into a set of days. */
 export function expandDates(entries, out = new Set()) {
   for (const entry of Array.isArray(entries) ? entries : []) {
     if (typeof entry === 'string') {
@@ -41,7 +43,7 @@ export function expandDates(entries, out = new Set()) {
   return out;
 }
 
-/** holiday-cn：isOffDay 为 true 是放假日，false 是调休上班日。 */
+/** holiday-cn: isOffDay true is a day off, false is a makeup workday. */
 export function fromHolidayCn(doc) {
   const holidays = [];
   const workdays = [];
@@ -53,7 +55,7 @@ export function fromHolidayCn(doc) {
   return { holidays, workdays };
 }
 
-/** 识别一份日历 JSON。认不出来就返回 null，由调用方跳过。 */
+/** Recognises a calendar JSON. Returns null (caller skips it) when unrecognised. */
 export function parseCalendarFile(doc, source = { kind: 'bundled', file: null }) {
   if (!doc || typeof doc !== 'object') return null;
 
@@ -61,7 +63,7 @@ export function parseCalendarFile(doc, source = { kind: 'bundled', file: null })
     return { id: doc.id || 'cn', tz: doc.tz || DEFAULT_CALENDAR_TZ, years: doc.years, source };
   }
   if (Array.isArray(doc.days)) {
-    // holiday-cn 的字段里提到了年份，年条目直接用它。
+    // holiday-cn names its year field; use it for the year entry directly.
     const year = String(doc.year || '');
     if (!/^\d{4}$/.test(year)) return null;
     return {
@@ -74,7 +76,7 @@ export function parseCalendarFile(doc, source = { kind: 'bundled', file: null })
   return null;
 }
 
-/** 同 id 的多个定义合并：年份级后者覆盖前者。 */
+/** Merges defs sharing an id: later defs win at the year level. */
 export function mergeCalendarDefs(defs) {
   const out = new Map();
   for (const def of defs) {
@@ -88,7 +90,7 @@ export function mergeCalendarDefs(defs) {
   return out;
 }
 
-/** 内容指纹：改了放假/调休日期，峰谷分桶的缓存就必须失效。 */
+/** Content fingerprint: changing a day off must invalidate peak/off-peak caches. */
 export function calendarKey(id, holidays, workdays) {
   const hash = crypto.createHash('sha1').update(String(id));
   for (const day of [...holidays].sort()) hash.update('h' + day);
@@ -121,7 +123,7 @@ function readJson(file) {
   }
 }
 
-/** entries: [{ dir, kind }]，按顺序合并，靠后的优先。 */
+/** entries: [{ dir, kind }], merged in order, later entries win. */
 export function loadCalendars(entries) {
   const defs = [];
   for (const { dir, kind } of entries) {
@@ -129,7 +131,7 @@ export function loadCalendars(entries) {
     try {
       files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
     } catch {
-      continue; // 目录不存在是正常情况（用户可能从未建过）
+      continue; // A missing directory is normal (the user may never have made one).
     }
     for (const name of files) {
       const file = path.join(dir, name);
