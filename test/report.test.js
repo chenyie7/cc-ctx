@@ -118,7 +118,7 @@ test('a report with no payload and no price table still renders', () => {
   assert.doesNotThrow(report);
   const text = stripAnsi(report());
   assert.match(text, /session cost\s+—/);
-  assert.match(text, /CC_CTX_PRICE_/);
+  assert.match(text, /add this model to ~\/\.claude\/cc-ctx\/providers\//);
   assert.match(text, /balance\s+—/);
   assert.match(text, /input\s+1,000/, 'usage still renders without a payload');
   assert.match(text, /model\s+deepseek-v4-flash\[1M\]/, 'model comes from the transcript');
@@ -182,7 +182,7 @@ test('colour is emitted unless NO_COLOR is set', () => {
   const args = {
     payload: PAYLOAD,
     totals: TOTALS,
-    prices: PRICES,
+    pricing: PRICES,
     balanceInfo: { balance: null, stale: false },
     transcriptPath: null,
   };
