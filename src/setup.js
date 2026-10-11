@@ -82,9 +82,17 @@ export function runSetup({ resetConfig = false } = {}) {
       say('');
       say(`WARNING  your config predates version ${shippedVersion} (it is ${userVersion || 'unversioned'}).`);
       say('         Defaults whose meaning changed are NOT applied to an existing file.');
-      say('         Version 2 switched the price table from USD to CNY — a config still');
-      say('         holding the old USD numbers will have them read as CNY, understating');
-      say('         cost by roughly 6.7x.');
+      if (userVersion < 3) {
+        say('         Version 3 moved prices and peak/off-peak rules out of this file');
+        say('         into JSON. CC_CTX_PRICE_* and CC_CTX_PEAK_* are no longer read.');
+        say('         The shipped conf/providers/deepseek.json now provides the prices.');
+        say('         If you had custom prices, copy that file to');
+        say('         ~/.claude/cc-ctx/providers/deepseek.json and edit it there.');
+      } else {
+        say('         Version 2 switched the price table from USD to CNY — a config still');
+        say('         holding the old USD numbers will have them read as CNY, understating');
+        say('         cost by roughly 6.7x.');
+      }
       say(`         Review ${USER_ENV}, or run:  cc-ctx setup --reset-config`);
       say('');
     }
