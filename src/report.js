@@ -8,6 +8,7 @@
 import { comma, paint, meter, visibleWidth, stripAnsi } from './render.js';
 import { costOf, hitRate, totalInputTokens } from './usage.js';
 import { formatBalance } from './balance.js';
+import { tierAt, nextTransition } from './pricing/schedule.js';
 
 function rule(width, cfg) {
   return paint('─'.repeat(Math.max(10, width)), 'divider', cfg);
@@ -31,9 +32,9 @@ function decimalsFor(amount) {
   return 2;
 }
 
-function toDisplayMoney(amount, prices, cfg) {
+function toDisplayMoney(amount, pricing, cfg) {
   if (amount === null) return null;
-  const from = prices?.currency || 'USD';
+  const from = pricing?.currency || 'USD';
   const converted = from === cfg.currency ? amount : amount * cfg.rate;
   return { amount, converted, from, symbol: cfg.symbol, currency: cfg.currency };
 }
@@ -45,7 +46,18 @@ function sessionFromPath(transcriptPath) {
   return base.replace(/\.jsonl$/, '') || null;
 }
 
-export function renderReport({ payload, totals, prices, balanceInfo, cfg, transcriptPath, cwd }) {
+/** The wall-clock time HH:MM at `instant` in `tz`. */
+function formatClock(instant, tz) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).format(instant);
+  } catch {
+    return instant.toISOString().slice(11, 16);
+  }
+}
+
+export function renderReport({ payload, totals, pricing, balanceInfo, cfg, transcriptPath, cwd }) {
   const lines = [];
   const cols = Number(process.stdout.columns) || 80;
   const innerWidth = Math.min(cols - 2, 72);
@@ -110,16 +122,14 @@ export function renderReport({ payload, totals, prices, balanceInfo, cfg, transc
 
   lines.push(rule(innerWidth, cfg));
 
-  const amount = costOf(totals, prices, {
-    offPeakMultiplier: cfg.schedule?.multiplier ?? 1,
-  });
-  const money = toDisplayMoney(amount, prices, cfg);
+  const amount = costOf(totals, pricing);
+  const money = toDisplayMoney(amount, pricing, cfg);
   if (money) {
     const digits = decimalsFor(money.converted);
     const value =
       `${money.symbol}${money.converted.toFixed(digits)}` +
       (money.from !== money.currency
-        ? `   (${prices.currency} ${money.amount.toFixed(decimalsFor(money.amount))} × ${cfg.rate})`
+        ? `   (${pricing.currency} ${money.amount.toFixed(decimalsFor(money.amount))} × ${cfg.rate})`
         : '');
     lines.push(row('session cost', value, cfg));
   } else {
@@ -127,6 +137,25 @@ export function renderReport({ payload, totals, prices, balanceInfo, cfg, transc
     lines.push(
       ' '.repeat(13) +
         paint('set CC_CTX_PRICE_* in ~/.claude/cc-ctx/cc-ctx.env', 'label', cfg),
+    );
+  }
+
+  // Prices and windows: make visible which price table, which calendar, and
+  // which tier is in effect.
+  if (pricing?.schedule) {
+    const now = new Date();
+    const tier = tierAt(now, pricing.schedule) === 'peak' ? 'peak' : 'off-peak';
+    const next = nextTransition(now, pricing.schedule);
+    const nextText = next
+      ? `→ ${next.tier === 'peak' ? 'peak' : 'off-peak'} @ ${formatClock(next.at, pricing.schedule.tz)}`
+      : '→ no switch within 32 days';
+    const source = pricing.schedule.calendar?.source;
+    const provenance = source
+      ? `${source.kind}${source.file ? ` ${source.file}` : ''}`
+      : 'no calendar';
+    lines.push(row('tier', `${tier} ${nextText}`, cfg, { color: tier === 'peak' ? 'warn' : 'ok' }));
+    lines.push(
+      row('pricing', `${pricing.providerId} · ${pricing.currency} · ${provenance}`, cfg, { color: 'label' }),
     );
   }
 

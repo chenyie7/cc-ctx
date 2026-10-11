@@ -8,8 +8,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { buildSchedule } from './peak.js';
-
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PLUGIN_ROOT = path.resolve(HERE, '..');
 
@@ -36,12 +34,20 @@ export const DEFAULT_COLORS = {
 /** Currency the shipped price table is quoted in. */
 export const DEFAULT_PRICE_CURRENCY = 'CNY';
 
+// Where price and holiday JSON is read from, built-in first so user files win.
+const PROVIDERS_BUILTIN = path.join(PLUGIN_ROOT, 'conf', 'providers');
+const CALENDARS_BUILTIN = path.join(PLUGIN_ROOT, 'conf', 'calendars');
+const REMOTE_PROVIDERS = path.join(INSTALL_DIR, 'remote', 'providers');
+const REMOTE_CALENDARS = path.join(INSTALL_DIR, 'remote', 'calendars');
+const USER_PROVIDERS = path.join(INSTALL_DIR, 'providers');
+const USER_CALENDARS = path.join(INSTALL_DIR, 'calendars');
+
 /**
  * Order matters more than membership here: the first fields are the ones worth
  * a glance, the rest fill in behind them.
  */
 export const DEFAULT_FIELDS = [
-  'context', 'dir', 'balance', 'cost', 'effort', 'tokens',
+  'context', 'dir', 'balance', 'cost', 'tier', 'effort', 'tokens',
   'brand', 'model', 'session', 'hitrate', 'calls',
 ];
 
@@ -74,55 +80,6 @@ function readEnvFile(file) {
   } catch {
     return {};
   }
-}
-
-/**
- * Model id -> price key fragment.
- * `deepseek-v4-flash[1M]` -> `DEEPSEEK_V4_FLASH`
- * Bracketed qualifiers like `[1M]` are context-window hints, not part of the
- * price identity, so they are dropped.
- */
-export function modelPriceKey(modelId) {
-  const base = String(modelId || '')
-    .replace(/\[[^\]]*\]/g, '')
-    .replace(/[^A-Za-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  return base.toUpperCase();
-}
-
-/**
- * Resolve per-million-token prices for a model. Returns null when the model has
- * no complete price set — the caller must show "unknown" rather than fall back
- * to some other model's prices, which is exactly the bug this tool exists to fix.
- */
-export function resolvePrices(env, modelId) {
-  const key = modelPriceKey(modelId);
-  const pick = (suffix) => env[`CC_CTX_PRICE_${key}_${suffix}`];
-
-  const rates = {
-    input: pick('INPUT'),
-    cacheWrite: pick('CACHE_WRITE'),
-    cacheRead: pick('CACHE_READ'),
-    output: pick('OUTPUT'),
-  };
-
-  const values = Object.values(rates);
-  if (values.every((v) => v === undefined)) return null;
-  if (values.some((v) => v === undefined || v === '' || Number.isNaN(Number(v)))) {
-    return null;
-  }
-  // Prices ship in CNY, matching the provider's Chinese price list, so the
-  // default path involves no conversion at all. A USD table still works — it is
-  // converted through CC_CTX_RATE — and a single model may override the
-  // currency on its own.
-  return {
-    currency:
-      env[`CC_CTX_PRICE_${key}_CURRENCY`] || env.CC_CTX_PRICE_CURRENCY || DEFAULT_PRICE_CURRENCY,
-    input: Number(rates.input),
-    cacheWrite: Number(rates.cacheWrite),
-    cacheRead: Number(rates.cacheRead),
-    output: Number(rates.output),
-  };
 }
 
 function splitList(value, fallback) {
@@ -179,7 +136,23 @@ export function loadConfig({ env = process.env, userEnvFile = USER_ENV } = {}) {
     contextWarn: Number(cc.CC_CTX_CONTEXT_WARN || 60),
     contextHot: Number(cc.CC_CTX_CONTEXT_HOT || 85),
     barWidth: Number(cc.CC_CTX_BAR_WIDTH || 10),
-    schedule: buildSchedule(cc),
+    installDir: INSTALL_DIR,
+    // Order is priority: later entries win over earlier ones.
+    providerDirs: [
+      { dir: PROVIDERS_BUILTIN, kind: 'bundled' },
+      { dir: cc.CC_CTX_PROVIDERS_REMOTE_DIR || REMOTE_PROVIDERS, kind: 'remote' },
+      { dir: cc.CC_CTX_PROVIDERS_DIR || USER_PROVIDERS, kind: 'user' },
+    ],
+    calendarDirs: [
+      { dir: CALENDARS_BUILTIN, kind: 'bundled' },
+      { dir: cc.CC_CTX_CALENDARS_REMOTE_DIR || REMOTE_CALENDARS, kind: 'remote' },
+      { dir: cc.CC_CTX_CALENDARS_DIR || USER_CALENDARS, kind: 'user' },
+    ],
+    tierAlertMinutes: Number(cc.CC_CTX_TIER_ALERT_MINUTES || 20),
+    remote: (cc.CC_CTX_REMOTE || 'on').toLowerCase() !== 'off',
+    remoteTtlMs: Number(cc.CC_CTX_REMOTE_TTL_MS || 86400000),
+    providerUrl: cc.CC_CTX_PROVIDER_URL || '',
+    calendarUrl: cc.CC_CTX_CALENDAR_URL || '',
     raw: cc,
   };
 }

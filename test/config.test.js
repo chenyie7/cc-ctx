@@ -4,14 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import {
-  parseEnvFile,
-  modelPriceKey,
-  resolvePrices,
-  loadConfig,
-  DEFAULT_COLORS,
-  DEFAULT_FIELDS,
-} from '../src/config.js';
+import { parseEnvFile, loadConfig, DEFAULT_COLORS, DEFAULT_FIELDS } from '../src/config.js';
 
 test('parseEnvFile reads quoted, bare, commented and blank values', () => {
   const parsed = parseEnvFile(
@@ -32,65 +25,6 @@ test('parseEnvFile reads quoted, bare, commented and blank values', () => {
   assert.equal(parsed.EMPTY, '');
   assert.equal(parsed.INDENTED, 'spaced');
   assert.equal(parsed.NOT_A_PAIR, undefined);
-});
-
-test('modelPriceKey normalises ids and drops context-window qualifiers', () => {
-  assert.equal(modelPriceKey('deepseek-v4-flash[1M]'), 'DEEPSEEK_V4_FLASH');
-  assert.equal(modelPriceKey('deepseek-flash'), 'DEEPSEEK_FLASH');
-  assert.equal(modelPriceKey('claude-sonnet-4-6'), 'CLAUDE_SONNET_4_6');
-  assert.equal(modelPriceKey(''), '');
-});
-
-test('resolvePrices needs a complete set and never borrows another model', () => {
-  const env = {
-    CC_CTX_PRICE_DEEPSEEK_V4_FLASH_INPUT: '0.30',
-    CC_CTX_PRICE_DEEPSEEK_V4_FLASH_CACHE_WRITE: '0.30',
-    CC_CTX_PRICE_DEEPSEEK_V4_FLASH_CACHE_READ: '0.006',
-    CC_CTX_PRICE_DEEPSEEK_V4_FLASH_OUTPUT: '1.20',
-  };
-  // The shipped table is quoted in CNY, matching the provider's Chinese list.
-  const prices = resolvePrices(env, 'deepseek-v4-flash[1M]');
-  assert.deepEqual(prices, {
-    currency: 'CNY',
-    input: 0.3,
-    cacheWrite: 0.3,
-    cacheRead: 0.006,
-    output: 1.2,
-  });
-
-  // An unknown model must resolve to null, not to some other model's rates —
-  // that substitution is exactly the bug this project exists to fix.
-  assert.equal(resolvePrices(env, 'some-other-model'), null);
-
-  // A partially specified model is also refused rather than half-priced.
-  const partial = { ...env };
-  delete partial.CC_CTX_PRICE_DEEPSEEK_V4_FLASH_OUTPUT;
-  assert.equal(resolvePrices(partial, 'deepseek-v4-flash[1M]'), null);
-
-  const broken = { ...env, CC_CTX_PRICE_DEEPSEEK_V4_FLASH_OUTPUT: 'not-a-number' };
-  assert.equal(resolvePrices(broken, 'deepseek-v4-flash[1M]'), null);
-});
-
-test('the price currency can be set globally or per model', () => {
-  const base = {
-    CC_CTX_PRICE_DEEPSEEK_V4_FLASH_INPUT: '2',
-    CC_CTX_PRICE_DEEPSEEK_V4_FLASH_CACHE_WRITE: '2',
-    CC_CTX_PRICE_DEEPSEEK_V4_FLASH_CACHE_READ: '0.04',
-    CC_CTX_PRICE_DEEPSEEK_V4_FLASH_OUTPUT: '8',
-  };
-  assert.equal(resolvePrices(base, 'deepseek-v4-flash').currency, 'CNY', 'CNY by default');
-  assert.equal(
-    resolvePrices({ ...base, CC_CTX_PRICE_CURRENCY: 'USD' }, 'deepseek-v4-flash').currency,
-    'USD',
-  );
-  assert.equal(
-    resolvePrices(
-      { ...base, CC_CTX_PRICE_CURRENCY: 'USD', CC_CTX_PRICE_DEEPSEEK_V4_FLASH_CURRENCY: 'CNY' },
-      'deepseek-v4-flash',
-    ).currency,
-    'CNY',
-    'a per-model currency wins',
-  );
 });
 
 function tempEnvFile(contents) {
@@ -174,4 +108,27 @@ test('NO_COLOR disables colour output', () => {
   const missing = path.join(os.tmpdir(), 'cc-ctx-missing.env');
   assert.equal(loadConfig({ env: { NO_COLOR: '1' }, userEnvFile: missing }).noColor, true);
   assert.equal(loadConfig({ env: {}, userEnvFile: missing }).noColor, false);
+});
+
+test('loadConfig provides the three price-data directory tiers and the alert threshold', () => {
+  const missing = path.join(os.tmpdir(), 'cc-ctx-missing.env');
+  const cfg = loadConfig({ env: {}, userEnvFile: missing });
+  assert.equal(cfg.providerDirs.length, 3, 'bundled / remote / user');
+  assert.deepEqual(cfg.providerDirs.map((d) => d.kind), ['bundled', 'remote', 'user']);
+  assert.deepEqual(cfg.calendarDirs.map((d) => d.kind), ['bundled', 'remote', 'user']);
+  assert.equal(cfg.tierAlertMinutes, 20, 'the default threshold is 20 minutes');
+  assert.equal(cfg.remote, true, 'remote refresh is on by default');
+  assert.equal(cfg.remoteTtlMs, 86400000);
+  assert.ok(cfg.installDir);
+});
+
+test('the alert threshold and remote toggle can be overridden', () => {
+  const file = tempEnvFile('CC_CTX_TIER_ALERT_MINUTES="5"\nCC_CTX_REMOTE="off"\n');
+  try {
+    const cfg = loadConfig({ env: {}, userEnvFile: file });
+    assert.equal(cfg.tierAlertMinutes, 5);
+    assert.equal(cfg.remote, false);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
 });

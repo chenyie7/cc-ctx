@@ -13,7 +13,7 @@ import {
 } from './render.js';
 import { costOf, hitRate, totalInputTokens } from './usage.js';
 import { formatBalance } from './balance.js';
-import { resolvePrices } from './config.js';
+import { tierAt, nextTransition } from './pricing/schedule.js';
 
 export function formatDuration(ms) {
   const totalMinutes = Math.floor((Number(ms) || 0) / 60000);
@@ -77,7 +77,7 @@ function contextItem(input, cfg) {
 }
 
 function buildItem(id, ctx) {
-  const { input, cfg, env, totals, prices, balanceInfo } = ctx;
+  const { input, cfg, env, totals, pricing, balanceInfo } = ctx;
   const cw = input?.context_window ?? {};
   const cost = input?.cost ?? {};
   const cache = input?.prompt_cache ?? {};
@@ -206,13 +206,34 @@ function buildItem(id, ctx) {
     }
 
     case 'cost': {
-      const amount = costOf(totals, prices, {
-        offPeakMultiplier: cfg.schedule?.multiplier ?? 1,
-      });
-      const value = amount === null ? '—' : formatMoney(amount, prices, cfg);
+      const amount = costOf(totals, pricing);
+      const value = amount === null ? '—' : formatMoney(amount, pricing, cfg);
       return labelledItem({
         group: 'stats', label: 'cost', value, color: amount === null ? 'label' : 'value', cfg,
       });
+    }
+
+    case 'tier': {
+      const schedule = pricing?.schedule;
+      if (!schedule) return null;
+      const now = new Date();
+      const tier = tierAt(now, schedule);
+      const label = tier === 'peak' ? 'peak' : 'off-peak';
+      const next = nextTransition(now, schedule);
+
+      let value = label;
+      // Peak is the expensive side, so it gets warn; off-peak gets ok.
+      let color = tier === 'peak' ? 'warn' : 'ok';
+      if (next) {
+        const minutes = Math.max(0, Math.round((next.at - now) / 60000));
+        if (minutes <= cfg.tierAlertMinutes) {
+          const nextLabel = next.tier === 'peak' ? 'peak' : 'off-peak';
+          value = `${label} · ${formatDuration(minutes * 60000)}→${nextLabel}`;
+          // About to get more expensive is the moment most worth noticing.
+          color = next.tier === 'peak' ? 'hot' : 'ok';
+        }
+      }
+      return labelledItem({ group: 'stats', label: 'tier', value, color, cfg });
     }
 
     case 'balance': {
@@ -227,14 +248,14 @@ function buildItem(id, ctx) {
 }
 
 /** Convert a cost in the price table's currency into the display currency. */
-export function formatMoney(amount, prices, cfg) {
-  const from = prices?.currency || 'USD';
+export function formatMoney(amount, pricing, cfg) {
+  const from = pricing?.currency || 'USD';
   const converted = from === cfg.currency ? amount : amount * cfg.rate;
   return `${cfg.symbol}${converted.toFixed(2)}`;
 }
 
-export function renderStatusline(input, cfg, { totals, prices, balanceInfo, env = process.env } = {}) {
-  const ctx = { input, cfg, env, totals, prices, balanceInfo };
+export function renderStatusline(input, cfg, { totals, pricing, balanceInfo, env = process.env } = {}) {
+  const ctx = { input, cfg, env, totals, pricing, balanceInfo };
   const items = [];
 
   for (const field of cfg.fields) {
