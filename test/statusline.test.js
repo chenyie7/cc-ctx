@@ -2,10 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { renderStatusline } from '../src/statusline.js';
 import { visibleWidth, stripAnsi } from '../src/render.js';
 import { loadConfig } from '../src/config.js';
+import { buildSchedule } from '../src/pricing/schedule.js';
+import { loadCalendars } from '../src/pricing/calendar.js';
 
 const MISSING_ENV = path.join(os.tmpdir(), 'cc-ctx-statusline-missing.env');
 
@@ -37,13 +40,23 @@ const TOTALS = {
   offPeak: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 },
 };
 
-const PRICES = { input: 2, cacheWrite: 2, cacheRead: 0.04, output: 8, currency: 'CNY' };
+const PEAK = { input: 2, cacheWrite: 2, cacheRead: 0.04, output: 8 };
+const PRICES = {
+  providerId: 'deepseek',
+  currency: 'CNY',
+  peak: PEAK,
+  offPeak: { input: 1, cacheWrite: 1, cacheRead: 0.02, output: 4 },
+  schedule: buildSchedule(
+    { tz: 'Asia/Shanghai', windows: '09:00-12:00,14:00-18:00', days: '1-5', calendar: 'cn', workdaysArePeak: true },
+    { calendars: loadCalendars([{ dir: fileURLToPath(new URL('../conf/calendars', import.meta.url)), kind: 'bundled' }]) },
+  ),
+};
 const BALANCE = { balance: { currency: 'CNY', total: 54.87, granted: 0, toppedUp: 54.87 }, stale: false };
 
 function render(columns, overrides = {}) {
   const env = { NO_COLOR: '1', COLUMNS: String(columns) };
   const cfg = loadConfig({ env: { ...env, ...overrides }, userEnvFile: MISSING_ENV });
-  const out = renderStatusline(PAYLOAD, cfg, { totals: TOTALS, prices: PRICES, balanceInfo: BALANCE, env });
+  const out = renderStatusline(PAYLOAD, cfg, { totals: TOTALS, pricing: PRICES, balanceInfo: BALANCE, env });
   return { out, lines: out.split('\n'), widths: out.split('\n').map(visibleWidth), cfg };
 }
 
@@ -70,7 +83,9 @@ test('a tight terminal degrades a composite item instead of overflowing', () => 
 
 test('the same payload stays within a comfortable width too', () => {
   const { widths } = render(100);
-  assert.ok(Math.max(...widths) <= 98, `expected headroom, got ${widths.join(', ')}`);
+  // The default field set now carries `tier`, which fills the 100-column wrap
+  // budget (99 content + 1 padding cell). Lines must still never exceed it.
+  assert.ok(Math.max(...widths) <= 99, `expected lines within the wrap budget, got ${widths.join(', ')}`);
 });
 
 test('padding is configurable and still respected', () => {
@@ -103,7 +118,7 @@ test('a missing transcript yields a placeholder rather than a wrong number', () 
     model: null, offPeak: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 },
   };
   const out = stripAnsi(
-    renderStatusline(PAYLOAD, cfg, { totals: empty, prices: PRICES, balanceInfo: BALANCE, env }),
+    renderStatusline(PAYLOAD, cfg, { totals: empty, pricing: PRICES, balanceInfo: BALANCE, env }),
   );
   assert.match(out, /cost ¥0\.00/);
   assert.doesNotMatch(out, /NaN|undefined/);
@@ -113,7 +128,21 @@ test('an unknown model shows a dash for cost, never another model price', () => 
   const env = { NO_COLOR: '1', COLUMNS: '100' };
   const cfg = loadConfig({ env, userEnvFile: MISSING_ENV });
   const out = stripAnsi(
-    renderStatusline(PAYLOAD, cfg, { totals: TOTALS, prices: null, balanceInfo: BALANCE, env }),
+    renderStatusline(PAYLOAD, cfg, { totals: TOTALS, pricing: null, balanceInfo: BALANCE, env }),
   );
   assert.match(out, /cost —/);
+});
+
+test('the tier field shows the current window and is absent without a schedule', () => {
+  const { out, cfg } = render(200, { CC_CTX_FIELDS: 'tier' });
+  assert.match(stripAnsi(out), /(peak|off-peak)/, 'a schedule must render a tier');
+
+  const env = { NO_COLOR: '1', COLUMNS: '200' };
+  const noSchedule = renderStatusline(PAYLOAD, cfg, {
+    totals: TOTALS,
+    pricing: { ...PRICES, schedule: null },
+    balanceInfo: BALANCE,
+    env,
+  });
+  assert.doesNotMatch(stripAnsi(noSchedule), /peak/, 'a provider without a schedule must not show a tier');
 });

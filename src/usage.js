@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isOffPeak } from './peak.js';
+import { tierAt, scheduleKey } from './pricing/schedule.js';
 
 /**
  * A fresh accumulator. `offPeak` holds the subset of each bucket that was
@@ -139,7 +139,7 @@ export function sumUsageFile(
           totals,
           record.message?.usage,
           record.message?.model,
-          isOffPeak(record.timestamp, schedule),
+          tierAt(record.timestamp, schedule) === 'offPeak',
         );
       }
     }
@@ -155,7 +155,7 @@ export function sumUsageFile(
               totals,
               record.message?.usage,
               record.message?.model,
-              isOffPeak(record.timestamp, schedule),
+              tierAt(record.timestamp, schedule) === 'offPeak',
             );
           }
         }
@@ -239,16 +239,6 @@ export function sumSession(entries, schedule = null) {
   );
 }
 
-/** Stable fingerprint of a pricing schedule, so a config change busts the cache. */
-export function scheduleKey(schedule) {
-  if (!schedule) return 'none';
-  const windows = (schedule.windows || [])
-    .map((w) => `${w.start}-${w.end}`)
-    .join('.');
-  const days = [...(schedule.days || [])].sort().join('');
-  return `${windows}/${days}/${schedule.multiplier}`;
-}
-
 /** Unconditional recomputation, no cache. Used by the report command. */
 export function computeTotals(transcriptPath, { schedule = null } = {}) {
   const entries = sessionFiles(transcriptPath);
@@ -284,27 +274,28 @@ export function computeTotalsCached(
 
 /**
  * Billed cost, in the price table's currency.
- * Returns null when the model has no complete price set — showing nothing is
- * correct, whereas substituting another model's rates is the bug being fixed.
+ * Returns null when the model has no price table — showing nothing is correct,
+ * whereas substituting another model's rates is the bug this project exists to
+ * fix.
  */
-export function costOf(totals, prices, { offPeakMultiplier = 1 } = {}) {
-  if (!prices) return null;
+export function costOf(totals, pricing) {
+  if (!pricing) return null;
 
   const off = totals.offPeak ?? { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
   const peak = {
-    input: totals.input - off.input,
-    cacheWrite: totals.cacheWrite - off.cacheWrite,
-    cacheRead: totals.cacheRead - off.cacheRead,
-    output: totals.output - off.output,
+    input: Math.max(0, totals.input - off.input),
+    cacheWrite: Math.max(0, totals.cacheWrite - off.cacheWrite),
+    cacheRead: Math.max(0, totals.cacheRead - off.cacheRead),
+    output: Math.max(0, totals.output - off.output),
   };
 
-  const bill = (b) =>
-    b.input * prices.input +
-    b.cacheWrite * prices.cacheWrite +
-    b.cacheRead * prices.cacheRead +
-    b.output * prices.output;
+  const bill = (b, r) =>
+    b.input * r.input +
+    b.cacheWrite * r.cacheWrite +
+    b.cacheRead * r.cacheRead +
+    b.output * r.output;
 
-  return (bill(peak) + bill(off) * offPeakMultiplier) / 1e6;
+  return (bill(peak, pricing.peak) + bill(off, pricing.offPeak)) / 1e6;
 }
 
 /**

@@ -18,10 +18,26 @@ import {
   sessionFiles,
   signature,
 } from '../src/usage.js';
-import { buildSchedule } from '../src/peak.js';
+import { buildSchedule } from '../src/pricing/schedule.js';
+import { loadCalendars } from '../src/pricing/calendar.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SESSION = path.join(HERE, 'fixtures', 'session.jsonl');
+
+const CALS = loadCalendars([
+  { dir: fileURLToPath(new URL('../conf/calendars', import.meta.url)), kind: 'bundled' },
+]);
+const DS = {
+  tz: 'Asia/Shanghai',
+  windows: '09:00-12:00,14:00-18:00',
+  days: '1-5',
+  calendar: 'cn',
+  workdaysArePeak: true,
+};
+const schedule = () => buildSchedule(DS, { calendars: CALS });
+
+// DeepSeek's peak rates, in CNY per 1,000,000 tokens.
+const RATES = { input: 0.3, cacheWrite: 0.3, cacheRead: 0.006, output: 1.2 };
 
 // The fixture is built so a hand count is auditable:
 //   main    input 100+200=300, cache write 10, cache read 1000+2000=3000,
@@ -150,7 +166,7 @@ test('totalInputTokens counts uncached, cache writes and cache reads', () => {
 test('off-peak calls land in their own bucket, leaving the totals intact', () => {
   // The fixture's 11:00Z record is outside every peak window; the 02:00Z and
   // 02:30Z records are inside one.
-  const { totals } = computeTotals(SESSION, { schedule: buildSchedule({}) });
+  const { totals } = computeTotals(SESSION, { schedule: schedule() });
   assert.deepEqual(totals.offPeak, {
     input: 200,
     cacheWrite: 0,
@@ -162,24 +178,27 @@ test('off-peak calls land in their own bucket, leaving the totals intact', () =>
 });
 
 test('the off-peak discount applies only to off-peak traffic', () => {
-  const prices = { input: 0.3, cacheWrite: 0.3, cacheRead: 0.006, output: 1.2, currency: 'USD' };
-  const { totals } = computeTotals(SESSION, { schedule: buildSchedule({}) });
+  const prices = { peak: RATES, offPeak: RATES };
+  const discounted = {
+    peak: RATES,
+    offPeak: Object.fromEntries(Object.entries(RATES).map(([k, v]) => [k, v * 0.5])),
+  };
+  const { totals } = computeTotals(SESSION, { schedule: schedule() });
 
   const full = costOf(totals, prices);
-  const discounted = costOf(totals, prices, { offPeakMultiplier: 0.5 });
 
   // The off-peak portion is 200*0.3 + 2000*0.006 + 60*1.2 = 144 units; halving
   // it must remove exactly half of that from the total.
   const offPeakBill = 200 * 0.3 + 2000 * 0.006 + 60 * 1.2;
-  assert.ok(Math.abs(full - discounted - offPeakBill / 2 / 1e6) < 1e-15);
+  assert.ok(Math.abs(full - costOf(totals, discounted) - offPeakBill / 2 / 1e6) < 1e-15);
 
   // And with no schedule everything is peak, so the discount is a no-op.
   const allPeak = computeTotals(SESSION).totals;
-  assert.ok(Math.abs(costOf(allPeak, prices, { offPeakMultiplier: 0.5 }) - costOf(allPeak, prices)) < 1e-15);
+  assert.ok(Math.abs(costOf(allPeak, discounted) - costOf(allPeak, prices)) < 1e-15);
 });
 
 test('costOf prices each bucket separately and returns null without a price table', () => {
-  const prices = { input: 0.3, cacheWrite: 0.3, cacheRead: 0.006, output: 1.2, currency: 'USD' };
+  const prices = { peak: RATES, offPeak: RATES };
   const expected =
     (307 * 0.3 + 10 * 0.3 + 3070 * 0.006 + 119 * 1.2) / 1e6;
   assert.ok(Math.abs(costOf(EXPECTED, prices) - expected) < 1e-12);
@@ -187,7 +206,7 @@ test('costOf prices each bucket separately and returns null without a price tabl
 });
 
 test('cache reads are priced far below uncached input', () => {
-  const prices = { input: 0.3, cacheWrite: 0.3, cacheRead: 0.006, output: 1.2, currency: 'USD' };
+  const prices = { peak: RATES, offPeak: RATES };
   const cached = costOf({ input: 0, cacheWrite: 0, cacheRead: 1e6, output: 0, thinking: 0, calls: 1 }, prices);
   const fresh = costOf({ input: 1e6, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0, calls: 1 }, prices);
   assert.ok(Math.abs(cached - 0.006) < 1e-12);
@@ -236,12 +255,12 @@ test('changing the pricing schedule invalidates the cache', () => {
   const store = new Map();
   const cache = { get: (k) => store.get(k), set: (k, v) => store.set(k, v) };
 
-  computeTotalsCached(SESSION, cache, 'usage', { schedule: buildSchedule({}) });
-  const same = computeTotalsCached(SESSION, cache, 'usage', { schedule: buildSchedule({}) });
+  computeTotalsCached(SESSION, cache, 'usage', { schedule: schedule() });
+  const same = computeTotalsCached(SESSION, cache, 'usage', { schedule: schedule() });
   assert.equal(same.cached, true);
 
   const changed = computeTotalsCached(SESSION, cache, 'usage', {
-    schedule: buildSchedule({ CC_CTX_OFFPEAK_MULTIPLIER: '0.25' }),
+    schedule: buildSchedule({ ...DS, windows: '10:00-11:00' }, { calendars: CALS }),
   });
   assert.equal(changed.cached, false, 'a different multiplier is a different cache entry');
 });

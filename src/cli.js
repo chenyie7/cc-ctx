@@ -8,8 +8,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 
-import { loadConfig, resolvePrices } from './config.js';
+import { loadConfig } from './config.js';
+import { resolvePricing } from './pricing/index.js';
+import { refreshRemote, remoteDirsFor, readMeta, isStale } from './pricing/remote.js';
 import { openCache } from './cache.js';
 import { computeTotalsCached, computeTotals, EMPTY_TOTALS } from './usage.js';
 import { resolveBalance, refreshBalance } from './balance.js';
@@ -84,7 +87,8 @@ async function commandStatusline(cfg) {
   }
 
   const modelId = input?.model?.id || input?.model?.display_name || '';
-  const prices = resolvePrices(cfg.raw, modelId);
+  const pricing = resolvePricing(cfg, modelId);
+  maybeRefreshRemote(cfg);
 
   let totals = { ...EMPTY_TOTALS };
   try {
@@ -92,7 +96,7 @@ async function commandStatusline(cfg) {
       input?.transcript_path,
       cache,
       `usage:${input?.session_id || 'x'}`,
-      { schedule: cfg.schedule },
+      { schedule: pricing?.schedule ?? null },
     );
     totals = result.totals;
     cache.save();
@@ -107,7 +111,7 @@ async function commandStatusline(cfg) {
     /* ditto */
   }
 
-  const rendered = renderStatusline(input, cfg, { totals, prices, balanceInfo });
+  const rendered = renderStatusline(input, cfg, { totals, pricing, balanceInfo });
 
   const stored = cache.get(cacheKey);
   if (stored) {
@@ -140,19 +144,58 @@ async function commandReport(cfg, args) {
     payload = null;
   }
 
-  const { totals } = transcriptPath
-    ? computeTotals(transcriptPath, { schedule: cfg.schedule })
-    : { totals: EMPTY_TOTALS };
+  // The peak/off-peak split needs the provider's schedule, and the schedule is
+  // chosen by the model. The payload names the model in the common case; with no
+  // payload the model is only known after reading the transcript, so read it
+  // once without a schedule and re-split if a schedule turns up.
+  let modelId = payload?.model?.id || payload?.model?.display_name || '';
+  let pricing = resolvePricing(cfg, modelId);
 
-  // Prefer the payload's model. Fall back to the model the transcript was
-  // actually written with, so the report works in a plain terminal even when
-  // the status line has never run for this session.
-  const modelId =
-    payload?.model?.id || payload?.model?.display_name || totals.model || '';
-  const prices = resolvePrices(cfg.raw, modelId);
+  let totals = EMPTY_TOTALS;
+  if (transcriptPath) {
+    totals = computeTotals(transcriptPath, { schedule: pricing?.schedule ?? null }).totals;
+    if (!modelId && totals.model) {
+      modelId = totals.model;
+      pricing = resolvePricing(cfg, modelId);
+      if (pricing?.schedule) {
+        totals = computeTotals(transcriptPath, { schedule: pricing.schedule }).totals;
+      }
+    }
+  }
+
   const balanceInfo = await resolveBalance(cfg);
 
-  return renderReport({ payload, totals, prices, balanceInfo, cfg, transcriptPath, cwd });
+  return renderReport({ payload, totals, pricing, balanceInfo, cfg, transcriptPath, cwd });
+}
+
+/**
+ * Refresh in the background when the cached data is stale; this render never
+ * waits for it. The bundled snapshot is always present, so there is no "wait on a
+ * cold start" question to weigh — never wait.
+ */
+function maybeRefreshRemote(cfg) {
+  try {
+    if (!cfg.remote) return;
+    const dirs = remoteDirsFor(cfg);
+    const meta = readMeta(dirs.metaFile);
+    if (!isStale(meta.calendars, cfg.remoteTtlMs, Date.now())) return;
+    const child = spawn(process.execPath, [process.argv[1], 'remote-refresh'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+  } catch {
+    /* the background refresh is a nice-to-have; a failure must not affect the status line */
+  }
+}
+
+async function commandRemoteRefresh(cfg) {
+  if (!cfg.remote) return '';
+  const { updated, failed } = await refreshRemote(cfg, { log: (m) => process.stderr.write(m + '\n') });
+  if (process.env.CC_CTX_DEBUG) {
+    process.stderr.write(`remote-refresh updated=[${updated}] failed=[${failed}]\n`);
+  }
+  return '';
 }
 
 function parseArgs(argv) {
@@ -172,12 +215,19 @@ const USAGE = `cc-ctx — Claude Code session context, tokens, cost and balance
   cc-ctx              show the session report for this directory
   cc-ctx setup        install the status line (run once, per machine)
   cc-ctx statusline   render one status line (called by Claude Code)
+  cc-ctx remote-refresh   refresh the cached price and holiday data
 
 options
   --transcript <path>  report on a specific transcript
   --session <id>       report on a specific session id
   --reset-config       setup: regenerate cc-ctx.env from the shipped defaults
                        (the existing file is backed up first)
+
+prices and holidays now live in JSON, not in cc-ctx.env:
+  <plugin>/conf/providers/*.json         shipped defaults
+  ~/.claude/cc-ctx/providers/*.json      your overrides (win over everything)
+  ~/.claude/cc-ctx/calendars/*.json      holiday calendars
+Old CC_CTX_PRICE_* keys are no longer read.
 `;
 
 export async function main(argv = process.argv.slice(2)) {
@@ -190,6 +240,8 @@ export async function main(argv = process.argv.slice(2)) {
       return commandStatusline(cfg);
     case 'report':
       return commandReport(cfg, args);
+    case 'remote-refresh':
+      return commandRemoteRefresh(cfg);
     case 'balance-refresh':
       await refreshBalance(cfg);
       return '';
@@ -220,3 +272,5 @@ main()
     }
     process.exitCode = 0;
   });
+
+export { parseArgs, USAGE };
