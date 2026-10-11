@@ -1,7 +1,9 @@
 // Configuration: defaults, then conf/default.env, then the user's own file.
 //
 // User config lives outside the plugin (~/.claude/cc-ctx/cc-ctx.env) so that
-// plugin updates never overwrite a user's prices or exchange rate.
+// plugin updates never overwrite the user's display and layout settings. Prices
+// and peak/off-peak rules are not env at all — they live in JSON under
+// conf/providers/ and conf/calendars/.
 
 import fs from 'node:fs';
 import path from 'node:path';

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { loadCalendars } from '../src/pricing/calendar.js';
@@ -136,6 +137,56 @@ test('nextTransition returns null when no flip is found within 32 days', () => {
   // The whole day is a peak window (24:00 means through to day end), so there is no flip point.
   const always = buildSchedule({ days: '1-7', windows: '00:00-24:00' }, { calendars: CALS });
   assert.equal(nextTransition(new Date('2026-09-29T02:00:00Z'), always), null);
+});
+
+// A schedule that cannot classify anything as peak would bill every call at
+// half price with no signal — the exact failure this subsystem exists to
+// prevent. A silently-discounted estimate is worse than an over-estimate, so
+// every one of these degenerate shapes must fall back to all-peak / the
+// documented default, never to offPeak.
+
+test('windows but no days defaults to peak on every day, not to never-peak', () => {
+  // The reviewer's reachable variant: a provider JSON with windows but no days.
+  // On a plain Tuesday 10:00 Beijing this must be peak, not the 50%-off fallthrough.
+  const s = buildSchedule({ tz: 'Asia/Shanghai', windows: '09:00-12:00,14:00-18:00' });
+  assert.ok(s, 'a valid window list is a usable schedule');
+  assert.equal(tierAt('2026-09-29T02:00:00Z', s), 'peak', 'Tuesday 10:00 Beijing is peak');
+  assert.equal(tierAt('2026-09-29T03:00:00Z', s), 'peak', 'Tuesday 11:00 Beijing is peak');
+  assert.equal(tierAt('2026-09-29T05:00:00Z', s), 'offPeak', 'Tuesday 13:00 Beijing is in the gap');
+});
+
+test('days that parse to nothing still default to all seven days', () => {
+  const s = buildSchedule({ tz: 'Asia/Shanghai', windows: '09:00-12:00', days: 'garbage' });
+  assert.ok(s, 'a valid window list remains usable');
+  assert.equal(tierAt('2026-09-29T02:00:00Z', s), 'peak', 'Tuesday 10:00 Beijing is peak');
+  assert.equal(tierAt('2026-10-03T02:00:00Z', s), 'peak', 'Saturday 10:00 is also peak (every day)');
+});
+
+test('a schedule with unparseable windows is unusable (null), never a silent discount', () => {
+  const s = buildSchedule({ tz: 'Asia/Shanghai', days: '1-5', windows: 'garbage' });
+  assert.equal(s, null, 'no windows means no peak window can ever be found');
+  // A null schedule means a single price table: everything at peak rates.
+  assert.equal(tierAt('2026-09-29T02:00:00Z', s), 'peak');
+  assert.equal(tierAt('2026-10-03T02:00:00Z', s), 'peak', 'even a weekend stays peak');
+});
+
+test('an empty schedule object is unusable (null), so everything is peak', () => {
+  const s = buildSchedule({});
+  assert.equal(s, null);
+  assert.equal(tierAt('2026-09-29T02:00:00Z', s), 'peak');
+});
+
+test('the shipped DeepSeek provider is unchanged by the fallbacks', () => {
+  // It declares both windows and days, so neither new path fires for it.
+  const doc = JSON.parse(
+    fs.readFileSync(fileURLToPath(new URL('../conf/providers/deepseek.json', import.meta.url)), 'utf8'),
+  );
+  const s = buildSchedule(doc.schedule, { calendars: CALS });
+  assert.ok(s, 'the shipped schedule must still build');
+  assert.equal(tierAt('2026-09-29T02:00:00Z', s), 'peak', 'Tuesday 10:00 Beijing stays peak');
+  assert.equal(tierAt('2026-10-03T02:00:00Z', s), 'offPeak', 'a Saturday stays off-peak');
+  assert.equal(tierAt('2026-10-02T02:00:00Z', s), 'offPeak', 'National Day stays off-peak');
+  assert.equal(tierAt('2026-01-04T02:00:00Z', s), 'peak', 'a makeup workday stays peak');
 });
 
 test('scheduleKey changes with calendar content, windows, and weekdays', () => {

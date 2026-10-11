@@ -146,3 +146,44 @@ test('the tier field shows the current window and is absent without a schedule',
   });
   assert.doesNotMatch(stripAnsi(noSchedule), /peak/, 'a provider without a schedule must not show a tier');
 });
+
+test('the tier countdown text and its hot colour follow a controlled clock', () => {
+  // Spec §12 drill #4: verify the tier field's countdown text, the arrow, and the
+  // "about to enter peak" hot colour under a frozen clock. The tier case reads
+  // the time through the injected `now`, so nothing here re-derives the colour
+  // from the implementation — these are assertions on the rendered ANSI output.
+  const env = { COLUMNS: '200', CC_CTX_TRUECOLOR: 'on' };
+  const cfg = loadConfig({
+    env: { ...env, CC_CTX_FIELDS: 'tier' },
+    userEnvFile: MISSING_ENV,
+  });
+  const renderAt = (iso) =>
+    renderStatusline(PAYLOAD, cfg, {
+      totals: TOTALS, pricing: PRICES, balanceInfo: BALANCE, env, now: () => new Date(iso),
+    });
+
+  // Tuesday Beijing: off-peak now, peak starts at 09:00 — inside the 20m alert.
+  const beforePeak = renderAt('2026-09-29T00:50:00Z'); // Beijing 08:50
+  assert.match(beforePeak, /· 10m→peak/, 'the countdown and the arrow are shown');
+  assert.ok(
+    beforePeak.includes('\x1b[38;2;248;113;113m'),
+    'about to get more expensive must use the hot colour',
+  );
+
+  // Currently peak, off-peak starts at 12:00 — countdown shown, colour unchanged.
+  const beforeOffPeak = renderAt('2026-09-29T03:50:00Z'); // Beijing 11:50
+  assert.match(beforeOffPeak, /peak · 10m→off-peak/);
+  assert.ok(
+    !beforeOffPeak.includes('\x1b[38;2;248;113;113m'),
+    'going cheaper must not turn hot',
+  );
+  assert.ok(
+    beforeOffPeak.includes('\x1b[38;2;250;204;21m'),
+    'a still-peak row keeps the current (warn) colour',
+  );
+
+  // Six hours from the next flip: the alert window is not entered, no countdown.
+  const far = renderAt('2026-09-28T19:00:00Z'); // Beijing Tuesday 03:00
+  assert.doesNotMatch(far, /→/, 'no arrow well outside the alert window');
+  assert.match(stripAnsi(far), /off-peak/);
+});

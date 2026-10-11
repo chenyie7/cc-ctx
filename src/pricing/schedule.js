@@ -102,10 +102,20 @@ export function zonedInstant(dateKey, minutes, tz) {
 // nonexistent years field and silently empties the calendar.
 export function buildSchedule(def, { calendars } = {}) {
   if (!def) return null;
+  const windows = parseWindows(def.windows);
+  // A schedule whose windows do not parse (or that declares no windows at all)
+  // can never classify anything as peak: tierAt would fall through to off-peak
+  // and bill every call at half price with no signal. Treat it as unusable — a
+  // null schedule means a single price table, everything at peak rates, which
+  // is the conservative direction (overestimate, never silently discount).
+  if (windows.length === 0) return null;
+  const days = parseDays(def.days);
   return {
     tz: def.tz || 'UTC',
-    windows: parseWindows(def.windows),
-    days: parseDays(def.days),
+    windows,
+    // No `days` (or an unparseable one) means "peak during these hours, every
+    // day", not "never peak" — default to all seven ISO weekdays.
+    days: days.size ? days : new Set([1, 2, 3, 4, 5, 6, 7]),
     workdaysArePeak: def.workdaysArePeak !== false,
     calendar: (def.calendar && calendars?.get(def.calendar)) || null,
   };

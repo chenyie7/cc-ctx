@@ -165,6 +165,8 @@ DeepSeek 的定价变化。
 
 统计范围：主 transcript + `<session>/subagents/*.jsonl`。主 transcript 里若出现 `isSidechain` 记录会被跳过，避免与子 agent 文件重复计数。
 
+整个 transcript 只用一套时段表（取自当前会话模型所属的供应商），因此子 agent 即使跑在别的供应商上，其 token 仍按主模型的价目表计价。
+
 每条 API 记录按**它自己的时间戳**判定时段、分别计价；时间戳缺失或无法解析时一律按**高峰**计价，绝不会静默打折。
 
 ## 余额
