@@ -136,7 +136,7 @@ export function renderReport({ payload, totals, pricing, balanceInfo, cfg, trans
     lines.push(row('session cost', '—  no price table for this model', cfg, { color: 'warn' }));
     lines.push(
       ' '.repeat(13) +
-        paint('set CC_CTX_PRICE_* in ~/.claude/cc-ctx/cc-ctx.env', 'label', cfg),
+        paint('add this model to ~/.claude/cc-ctx/providers/', 'label', cfg),
     );
   }
 

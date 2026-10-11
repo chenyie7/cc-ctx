@@ -31,9 +31,6 @@ export const DEFAULT_COLORS = {
   barEmpty: '38;2;51;65;85',
 };
 
-/** Currency the shipped price table is quoted in. */
-export const DEFAULT_PRICE_CURRENCY = 'CNY';
-
 // Where price and holiday JSON is read from, built-in first so user files win.
 const PROVIDERS_BUILTIN = path.join(PLUGIN_ROOT, 'conf', 'providers');
 const CALENDARS_BUILTIN = path.join(PLUGIN_ROOT, 'conf', 'calendars');
