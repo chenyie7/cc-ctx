@@ -77,7 +77,7 @@ function contextItem(input, cfg) {
 }
 
 function buildItem(id, ctx) {
-  const { input, cfg, env, totals, pricing, balanceInfo } = ctx;
+  const { input, cfg, env, totals, pricing, balanceInfo, now } = ctx;
   const cw = input?.context_window ?? {};
   const cost = input?.cost ?? {};
   const cache = input?.prompt_cache ?? {};
@@ -216,21 +216,24 @@ function buildItem(id, ctx) {
     case 'tier': {
       const schedule = pricing?.schedule;
       if (!schedule) return null;
-      const now = new Date();
-      const tier = tierAt(now, schedule);
+      const at = now();
+      const tier = tierAt(at, schedule);
       const label = tier === 'peak' ? 'peak' : 'off-peak';
-      const next = nextTransition(now, schedule);
+      const next = nextTransition(at, schedule);
 
       let value = label;
       // Peak is the expensive side, so it gets warn; off-peak gets ok.
       let color = tier === 'peak' ? 'warn' : 'ok';
       if (next) {
-        const minutes = Math.max(0, Math.round((next.at - now) / 60000));
+        const minutes = Math.max(0, Math.round((next.at - at) / 60000));
         if (minutes <= cfg.tierAlertMinutes) {
           const nextLabel = next.tier === 'peak' ? 'peak' : 'off-peak';
           value = `${label} · ${formatDuration(minutes * 60000)}→${nextLabel}`;
-          // About to get more expensive is the moment most worth noticing.
-          color = next.tier === 'peak' ? 'hot' : 'ok';
+          // About to get more expensive is the moment most worth noticing, so it
+          // goes hot. About to get cheaper keeps the current window's colour
+          // (spec: "entering off-peak does not recolour") — a row still inside
+          // the expensive window must not turn green and hide that.
+          if (next.tier === 'peak') color = 'hot';
         }
       }
       return labelledItem({ group: 'stats', label: 'tier', value, color, cfg });
@@ -254,8 +257,8 @@ export function formatMoney(amount, pricing, cfg) {
   return `${cfg.symbol}${converted.toFixed(2)}`;
 }
 
-export function renderStatusline(input, cfg, { totals, pricing, balanceInfo, env = process.env } = {}) {
-  const ctx = { input, cfg, env, totals, pricing, balanceInfo };
+export function renderStatusline(input, cfg, { totals, pricing, balanceInfo, env = process.env, now = () => new Date() } = {}) {
+  const ctx = { input, cfg, env, totals, pricing, balanceInfo, now };
   const items = [];
 
   for (const field of cfg.fields) {
