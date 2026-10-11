@@ -20,6 +20,8 @@
 - 用户级覆盖目录是 `~/.claude/cc-ctx/providers|calendars/`，**不能**放在 `~/.claude/cc-ctx/conf/` 下（`src/setup.js:41-49` 会递归删除并重拷 `conf`）。
 - 价格以 CNY 报价；报价货币 ≠ 显示货币时经 `CC_CTX_RATE` 换算（沿用 `src/report.js:34-39`、`src/statusline.js:230-234` 的现有逻辑）。
 - 配置版本升到 `3`。
+- **代码注释与 `test(...)` 名称一律用英文**，与 `src/` 现有风格一致。本计划正文是中文，但代码块里若出现中文注释，实现时一律译成英文（Task 1 的审查就在这里栽过一次）。
+- **测试里要拿仓库内路径，用 `fileURLToPath(new URL('…', import.meta.url))`，不要用 `new URL(…).pathname`**。后者在 Windows 上返回 `/D:/…`，`fs` 读不到，`loadCalendars` 会**静默**返回空表，于是所有节假日断言一起失效（Task 2 实测踩到）。
 - 时段口径（官方原文）：高峰 = 北京时间周一至周五（不含中国法定节假日）09:00-12:00、14:00-18:00；其余（含周末与节假日全天）空闲；空闲价 = 高峰价 × 0.5。调休上班日按**高峰**（我方保守选择）。
 
 ## Review Focus
@@ -771,7 +773,7 @@ git commit -m "feat(pricing): 时段引擎（峰谷判定与下次切换推算�
 - Produces:
   - `normalizeModelId(id) -> string` —— 去掉 `[..]` 限定符、小写、trim
   - `normalizeRates(raw) -> { input, cacheWrite, cacheRead, output } | null` —— 四键齐全且为有限数字，否则 null
-  - `parseProvider(doc, source, { calendars }) -> { id, currency, offPeakMultiplier, models, schedule, source } | null`
+  - `parseProvider(doc, source, { calendars }) -> { id, currency, models, schedule, source } | null`（不含 `offPeakMultiplier`：折算在解析期就落进每个模型的 `offPeak` 里，原样暴露一个没人读的字段只是多余的接口面）
   - `matchRates(provider, modelId) -> { key, peak, offPeak } | null`
   - `loadProviders(entries, { calendars }) -> provider[]` —— 带日历表；同 id 后者覆盖前者
 
@@ -785,6 +787,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   normalizeModelId,
@@ -796,8 +799,8 @@ import {
 import { loadCalendars } from '../src/pricing/calendar.js';
 import { tierAt } from '../src/pricing/schedule.js';
 
-const CALS = loadCalendars([{ dir: new URL('../conf/calendars', import.meta.url).pathname, kind: 'bundled' }]);
-const BUNDLED = { dir: new URL('../conf/providers', import.meta.url).pathname, kind: 'bundled' };
+const CALS = loadCalendars([{ dir: fileURLToPath(new URL('../conf/calendars', import.meta.url)), kind: 'bundled' }]);
+const BUNDLED = { dir: fileURLToPath(new URL('../conf/providers', import.meta.url)), kind: 'bundled' };
 
 test('normalizeModelId 去掉方括号限定符并小写', () => {
   assert.equal(normalizeModelId('deepseek-flash[1M]'), 'deepseek-flash');
@@ -833,18 +836,17 @@ test('parseProvider 认别名，认不出就拒绝', () => {
   assert.equal(parseProvider({ id: 'x', models: { y: { input: 1 } } }), null, '模型四键不齐不能要');
 });
 
-test('matchRates 精确匹配优先于通配，通配取最长模式', () => {
+test('matchRates 只认具体模型名，认不出就返回 null', () => {
   const p = parseProvider({
     id: 'demo',
     models: {
-      'demo-*': { input: 9, cacheWrite: 9, cacheRead: 9, output: 9 },
-      'demo-long-*': { input: 5, cacheWrite: 5, cacheRead: 5, output: 5 },
-      'demo-exact': { input: 1, cacheWrite: 1, cacheRead: 1, output: 1 },
+      'demo-a': { input: 1, cacheWrite: 1, cacheRead: 1, output: 1 },
+      'demo-b': { input: 2, cacheWrite: 2, cacheRead: 2, output: 2 },
     },
   });
-  assert.equal(matchRates(p, 'demo-exact').peak.input, 1, '精确胜通配');
-  assert.equal(matchRates(p, 'demo-long-thing').peak.input, 5, '更长的模式胜出');
-  assert.equal(matchRates(p, 'demo-other').peak.input, 9);
+  assert.equal(matchRates(p, 'demo-a').peak.input, 1);
+  assert.equal(matchRates(p, 'demo-b').peak.input, 2);
+  assert.equal(matchRates(p, 'demo-long-thing'), null, '没有通配：前缀相同也不算命中');
   assert.equal(matchRates(p, 'nothing-here'), null);
 });
 
@@ -962,8 +964,8 @@ Expected: FAIL —— `Cannot find module '.../src/pricing/provider.js'`
 ```js
 // 供应商定义：模型 -> 费率，外加该供应商自己的时段规则。
 //
-// 匹配不到就返回 null。绝不写 "deepseek-*" 这类兜底通配 —— 那会让新出的模型
-// 静默按老模型的价计价，正是本项目当初要修的 bug。
+// 只做精确匹配，没有通配。新出了模型而价目表里没配，就显示「无价目表」；
+// 绝不会静默按老模型的价去算 —— 那种静默算错正是本项目当初要修的 bug。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1001,12 +1003,6 @@ function scaleRates(rates, multiplier) {
   return out;
 }
 
-/** "*" 通配转正则；按模式长度定优先级，长的更具体。 */
-function patternToRegex(pattern) {
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-  return new RegExp(`^${escaped}$`);
-}
-
 export function parseProvider(doc, source = { kind: 'bundled', file: null }, { calendars } = {}) {
   if (!doc || typeof doc !== 'object') return null;
   const id = String(doc.id ?? '').trim();
@@ -1024,15 +1020,7 @@ export function parseProvider(doc, source = { kind: 'bundled', file: null }, { c
       .map(normalizeModelId)
       .filter(Boolean);
     for (const name of names) {
-      const glob = name.includes('*');
-      models.push({
-        key: name,
-        glob,
-        matcher: glob ? patternToRegex(name) : null,
-        rank: glob ? name.replace(/\*/g, '').length : Infinity, // 精确永远第一
-        peak,
-        offPeak,
-      });
+      models.push({ key: name, peak, offPeak });
     }
   }
   if (!models.length) return null;
@@ -1046,18 +1034,12 @@ export function parseProvider(doc, source = { kind: 'bundled', file: null }, { c
   };
 }
 
-/** 精确优先，其次通配按模式长度由长到短。 */
+/** 只做精确匹配。没有通配 —— 理由见文件头。 */
 export function matchRates(provider, modelId) {
   const id = normalizeModelId(modelId);
   if (!provider || !id) return null;
-
-  let best = null;
-  for (const model of provider.models) {
-    const hit = model.glob ? model.matcher.test(id) : model.key === id;
-    if (!hit) continue;
-    if (!best || model.rank > best.rank) best = model;
-  }
-  return best ? { key: best.key, peak: best.peak, offPeak: best.offPeak } : null;
+  const hit = provider.models.find((model) => model.key === id);
+  return hit ? { key: hit.key, peak: hit.peak, offPeak: hit.offPeak } : null;
 }
 
 function readJson(file) {
@@ -1124,10 +1106,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { loadProviders, resolvePricing } from '../src/pricing/index.js';
 
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 const CFG = {
   providerDirs: [{ dir: path.join(root, 'conf', 'providers'), kind: 'bundled' }],
   calendarDirs: [{ dir: path.join(root, 'conf', 'calendars'), kind: 'bundled' }],
@@ -1693,7 +1676,7 @@ export function costOf(totals, pricing) {
 import { buildSchedule } from '../src/pricing/schedule.js';
 import { loadCalendars } from '../src/pricing/calendar.js';
 
-const CALS = loadCalendars([{ dir: new URL('../conf/calendars', import.meta.url).pathname, kind: 'bundled' }]);
+const CALS = loadCalendars([{ dir: fileURLToPath(new URL('../conf/calendars', import.meta.url)), kind: 'bundled' }]);
 const DS = { tz: 'Asia/Shanghai', windows: '09:00-12:00,14:00-18:00', days: '1-5', calendar: 'cn', workdaysArePeak: true };
 const schedule = () => buildSchedule(DS, { calendars: CALS });
 ```
@@ -1894,6 +1877,7 @@ Expected: PASS
 - Modify: `src/statusline.js`（新增 `tier` case；`cost` case 改用 `pricing`）
 - Modify: `test/statusline.test.js`
 - Modify: `conf/default.env`（`CC_CTX_FIELDS` 加入 `tier`）
+- Modify: `src/config.js`（`DEFAULT_FIELDS` 同步加入 `tier`——它是 `conf/default.env` 的镜像，两边必须一致）
 
 **Interfaces:**
 - Consumes: `tierAt` / `nextTransition`（Task 2）、`pricing` 对象（Task 4）
@@ -1912,7 +1896,7 @@ const PRICES = {
   offPeak: { input: 1, cacheWrite: 1, cacheRead: 0.02, output: 4 },
   schedule: buildSchedule(
     { tz: 'Asia/Shanghai', windows: '09:00-12:00,14:00-18:00', days: '1-5', calendar: 'cn', workdaysArePeak: true },
-    { calendars: loadCalendars([{ dir: new URL('../conf/calendars', import.meta.url).pathname, kind: 'bundled' }]) },
+    { calendars: loadCalendars([{ dir: fileURLToPath(new URL('../conf/calendars', import.meta.url)), kind: 'bundled' }]) },
   ),
 };
 ```
@@ -1920,6 +1904,8 @@ const PRICES = {
 顶部加 import：
 
 ```js
+import { fileURLToPath } from 'node:url';
+
 import { buildSchedule } from '../src/pricing/schedule.js';
 import { loadCalendars } from '../src/pricing/calendar.js';
 ```
@@ -2004,13 +1990,24 @@ import { tierAt, nextTransition } from './pricing/schedule.js';
 
 `formatMoney` 的 `prices?.currency` 改为 `pricing?.currency`（参数名一并改成 `pricing`）。
 
-- [ ] **Step 4: 改 `conf/default.env`**
+- [ ] **Step 4: 改 `conf/default.env` 与 `src/config.js` 的字段表**
 
-`CC_CTX_FIELDS` 改为：
+`conf/default.env` 的 `CC_CTX_FIELDS` 改为：
 
 ```
 CC_CTX_FIELDS="context dir balance cost tier effort tokens brand model session hitrate calls"
 ```
+
+`src/config.js` 的 `DEFAULT_FIELDS` 是同一份清单的兜底镜像，把 `'tier'` 插在 `'cost'` 之后：
+
+```js
+export const DEFAULT_FIELDS = [
+  'context', 'dir', 'balance', 'cost', 'tier', 'effort', 'tokens',
+  'brand', 'model', 'session', 'hitrate', 'calls',
+];
+```
+
+（`test/config.test.js` 里 `assert.deepEqual(cfg.fields, DEFAULT_FIELDS)` 比的是这两者，同步改动后依然通过。）
 
 - [ ] **Step 5: 只跑状态栏自己的测试**
 
