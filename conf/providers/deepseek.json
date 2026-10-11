@@ -1,0 +1,29 @@
+{
+  "id": "deepseek",
+  "currency": "CNY",
+  "offPeakMultiplier": 0.5,
+  "models": {
+    "deepseek-flash": {
+      "aliases": ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
+      "input": 2.00,
+      "cacheWrite": 2.00,
+      "cacheRead": 0.04,
+      "output": 8.00,
+      "offPeak": { "input": 1.00, "cacheWrite": 1.00, "cacheRead": 0.02, "output": 4.00 }
+    },
+    "deepseek-v4-pro": {
+      "input": 9.00,
+      "cacheWrite": 9.00,
+      "cacheRead": 0.30,
+      "output": 27.00,
+      "offPeak": { "input": 4.50, "cacheWrite": 4.50, "cacheRead": 0.15, "output": 13.50 }
+    }
+  },
+  "schedule": {
+    "tz": "Asia/Shanghai",
+    "windows": "09:00-12:00,14:00-18:00",
+    "days": "1-5",
+    "calendar": "cn",
+    "workdaysArePeak": true
+  }
+}
