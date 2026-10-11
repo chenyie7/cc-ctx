@@ -66,7 +66,6 @@ export function parseProvider(doc, source = { kind: 'bundled', file: null }, { c
   return {
     id,
     currency: doc.currency || 'CNY',
-    offPeakMultiplier: Number.isFinite(Number(doc.offPeakMultiplier)) ? Number(doc.offPeakMultiplier) : 1,
     models,
     schedule: buildSchedule(doc.schedule, { calendars }),
     source,
