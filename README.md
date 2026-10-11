@@ -7,7 +7,7 @@ Claude Code 状态栏：context 用量、token 明细、缓存命中率、本次
  dir /Users/chenyi/ai-project/cc-ctx  session cc-ctx  duration 42m  lines +156/-23
  context ██████░░░░ 62% 620,000 / 1,000,000
  input 268,199  cache write 0  cache read 24,772,992  output 288,767
- hit rate 98.9%  calls 229  cost ¥4.12  balance ¥56.24
+ hit rate 98.9%  calls 229  cost ¥4.12  balance ¥56.24  tier off-peak
 ```
 
 宽度不够时自动换行；颜色、字段、顺序、分隔符都可配。
@@ -79,33 +79,22 @@ cc-ctx statusline    渲染一行状态栏（由 Claude Code 调用）
 
 ## 配置
 
-编辑 `~/.claude/cc-ctx/cc-ctx.env`。这个文件**不随插件更新**，所以你的单价和配色不会丢。
+编辑 `~/.claude/cc-ctx/cc-ctx.env`。这个文件**不随插件更新**，所以你的字段与配色不会丢。
 
 ```bash
 CC_CTX_CURRENCY="CNY"; CC_CTX_SYMBOL="¥"
-
-# 人民币 / 每百万 token，高峰价（来源：DeepSeek 中文价目页）
-CC_CTX_PRICE_DEEPSEEK_V4_FLASH_INPUT="2.00"
-CC_CTX_PRICE_DEEPSEEK_V4_FLASH_CACHE_WRITE="2.00"
-CC_CTX_PRICE_DEEPSEEK_V4_FLASH_CACHE_READ="0.04"
-CC_CTX_PRICE_DEEPSEEK_V4_FLASH_OUTPUT="8.00"
-CC_CTX_PRICE_CURRENCY="CNY"
-
 CC_CTX_FIELDS="brand model effort cache dir session duration lines context tokens hitrate calls cost balance"
 ```
 
-- **价格默认就是人民币**，和展示币种一致，所以默认路径**不做任何换算**。
-- 模型 key 的算法：模型 id 去掉 `[...]` 后缀、非字母数字折叠成 `_`、转大写。`deepseek-v4-flash[1M]` → `DEEPSEEK_V4_FLASH`。
-- **没有匹配到价目表时显示 `—`，不会拿别的模型的价格顶上。** 这是刻意的。
+价格与峰谷规则不在这个文件里，见下文「Prices」。**没有匹配到价目表时显示 `—`，不会拿别的模型的价格顶上。** 这是刻意的。
 
 ### 币种换算
 
 ```bash
-CC_CTX_PRICE_CURRENCY="USD"    # 价目表是美元
-CC_CTX_RATE="6.67"             # 换算到 CC_CTX_CURRENCY
+CC_CTX_RATE="6.67"    # 价目表币种 → CC_CTX_CURRENCY
 ```
 
-只有当**价目表币种 ≠ 展示币种**时才换算。单个模型可用 `CC_CTX_PRICE_<MODEL>_CURRENCY` 单独指定。
+只有当**价目表币种 ≠ 展示币种**时才换算；价目表币种由供应商 JSON 的 `currency` 字段给出。
 
 > ⚠️ **别用市场汇率换算 DeepSeek 的英文价目。** 英文页的 `$0.30` 对应中文页的 `¥2.00`，比值是 **6.67**，不是 7.15。用市场汇率会让结果偏高约 7%。人民币数字请直接用中文页的。
 
@@ -137,10 +126,37 @@ CC_CTX_COLOR_DIVIDER="38;2;71;85;105"
 CC_CTX_COLOR_BAR_EMPTY="38;2;51;65;85"
 ```
 
+## Prices
+
+Prices and peak/off-peak rules live in JSON, not in `cc-ctx.env`:
+
+| 位置 | 作用 |
+|---|---|
+| `<plugin>/conf/providers/*.json` | 随插件分发的价目表 |
+| `<plugin>/conf/calendars/*.json` | 内置的节假日日历 |
+| `~/.claude/cc-ctx/providers/*.json` | 你的覆盖（优先级最高，升级不丢） |
+| `~/.claude/cc-ctx/calendars/*.json` | 你的日历覆盖 |
+| `~/.claude/cc-ctx/remote/` | 后台联网抓下来的缓存 |
+
+**新增一个 API** = 往 `~/.claude/cc-ctx/providers/` 放一个 JSON 文件，代码零改动。
+
+DeepSeek 的口径是北京时间周一至周五（不含中国法定节假日）09:00–12:00、14:00–18:00
+为高峰，其余（含周末与节假日全天）为空闲，空闲价是高峰价的一半。调休上班日按高峰计
+（比官方字面口径保守）。
+
+状态栏的 `tier` 字段显示当前档位；距离下次切换 20 分钟内会追加倒计时，即将进入高峰
+时转成醒目颜色（阈值用 `CC_CTX_TIER_ALERT_MINUTES` 调）。
+
+数据会在后台刷新（默认 24h 一次，`CC_CTX_REMOTE=off` 可关）；失败时静默沿用缓存或
+内置快照。**注意**：价格的「联网」只是让你自动拿到仓库里的更新，不会自动跟踪
+DeepSeek 的定价变化。
+
+> 从旧版本升级：`CC_CTX_PRICE_*` / `CC_CTX_PEAK_*` 已不再读取，改由上述 JSON 提供。
+
 ## 口径
 
 ```
-花费   = [高峰部分按 P，低谷部分按 P × CC_CTX_OFFPEAK_MULTIPLIER] / 1e6
+花费   = [高峰部分按高峰价，低谷部分按低谷价] / 1e6
 命中率 = cache_read / (input + cache_write + cache_read)
 ```
 
@@ -148,21 +164,7 @@ CC_CTX_COLOR_BAR_EMPTY="38;2;51;65;85"
 
 统计范围：主 transcript + `<session>/subagents/*.jsonl`。主 transcript 里若出现 `isSidechain` 记录会被跳过，避免与子 agent 文件重复计数。
 
-### 高峰 / 低谷
-
-DeepSeek 在低谷时段**半价**。配置里的单价是**高峰价**，每条 API 记录按**它自己的时间戳**判定时段，分别计价。
-
-默认高峰窗口（UTC，周一至周五）：`01:00-04:00` 与 `06:00-10:00`。
-
-```bash
-CC_CTX_PEAK_WINDOWS="01:00-04:00,06:00-10:00"   # UTC，逗号分隔
-CC_CTX_PEAK_DAYS="1-5"                          # ISO 星期，1=周一 … 7=周日
-CC_CTX_OFFPEAK_MULTIPLIER="0.5"                 # 低谷折扣
-```
-
-**已知偏差**：DeepSeek 还规定**中国法定节假日算低谷**，但节假日表没有可靠的离线来源，所以那些天会按高峰计价 —— 偏高，不会偏低。要精确需要手动维护或接一个节假日接口。
-
-时间戳缺失或无法解析的记录一律按**高峰**计价，绝不会静默打折。
+每条 API 记录按**它自己的时间戳**判定时段、分别计价；时间戳缺失或无法解析时一律按**高峰**计价，绝不会静默打折。
 
 ## 余额
 
@@ -187,6 +189,6 @@ npm test
 - **不在 Anthropic 官方插件市场** —— 那些名字保留给官方策展。这里通过 GitHub 仓库分发。
 - 余额接口是 **DeepSeek 专有**的；换 provider 需改 `CC_CTX_BALANCE_URL`，其他厂商的响应格式不同，需自行适配。
 - 价格默认人民币，与展示币种一致，不做换算；换成美元价目表时才用 `CC_CTX_RATE`，汇率不会自动更新。
-- 中国法定节假日未建模（见上文「高峰 / 低谷」），那些天偏高。
+- 调休上班日按高峰计价（见上文「Prices」），比官方字面口径保守。
 - `cost` 统计的是 transcript 里全部记录，**不随 `/clear` 归零**（Claude Code 自带的 `cost.total_cost_usd` 会归零）。
 - **成本是估算不是账单**。依据是官方价目页；DeepSeek 没有按会话查费的接口，只有账户总余额。余额本身有结算滞后，不足以把价格校验到 ±20% 以内。

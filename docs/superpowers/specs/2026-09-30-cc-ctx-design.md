@@ -150,6 +150,10 @@ CC_CTX_COLOR_BAR_EMPTY="38;2;51;65;85"
 
 ## 花费公式
 
+> **2026-10-11 更新**：价格与峰谷规则已迁出 `cc-ctx.env`，改由 `conf/providers/*.json`
+> 与 `conf/calendars/*.json` 提供，并补上了中国法定节假日。见
+> `docs/superpowers/specs/2026-10-11-pricing-subsystem-design.md`。本节其余内容为历史记录。
+
 ```
 cost = (input·P_input + cache_write·P_write + cache_read·P_read + output·P_output) / 1e6
 命中率 = cache_read / (input + cache_write + cache_read)
