@@ -133,7 +133,7 @@ test('the alert threshold and remote toggle can be overridden', () => {
   }
 });
 
-test('configVersion 是 3', () => {
+test('config version is 3', () => {
   const cfg = loadConfig({ env: {}, userEnvFile: path.join(os.tmpdir(), 'cc-ctx-missing.env') });
   assert.equal(cfg.raw.CC_CTX_CONFIG_VERSION, '3');
 });
