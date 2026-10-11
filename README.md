@@ -50,7 +50,7 @@ cc-ctx 改为**从 transcript 累加真实用量**，按你自己配的价目表
 `setup` 做四件事，全部可逆：
 
 1. 把运行时复制到 `~/.claude/cc-ctx/`（插件更新会换目录，statusLine 不能直接指向插件位置）
-2. 生成 `~/.claude/cc-ctx/cc-ctx.env`（已存在则不动，你的单价和配色不会被覆盖）
+2. 生成 `~/.claude/cc-ctx/cc-ctx.env`（已存在则不动，你的字段和配色不会被覆盖）
 3. 软链 `~/.local/bin/cc-ctx`，这样你自己的终端也能用
 4. 备份并改写 `~/.claude/settings.json` 的 `statusLine`
 
@@ -83,7 +83,7 @@ cc-ctx statusline    渲染一行状态栏（由 Claude Code 调用）
 
 ```bash
 CC_CTX_CURRENCY="CNY"; CC_CTX_SYMBOL="¥"
-CC_CTX_FIELDS="brand model effort cache dir session duration lines context tokens hitrate calls cost balance"
+CC_CTX_FIELDS="brand model effort cache dir session duration lines context tokens hitrate calls cost tier balance"
 ```
 
 价格与峰谷规则不在这个文件里，见下文「Prices」。**没有匹配到价目表时显示 `—`，不会拿别的模型的价格顶上。** 这是刻意的。
@@ -108,6 +108,7 @@ CC_CTX_RATE="6.67"    # 价目表币种 → CC_CTX_CURRENCY
 | `context` | 进度条 + 百分比 + 已用/总量 |
 | `tokens` | 展开为 input / cache write / cache read / output |
 | `hitrate` / `calls` / `cost` / `balance` | 命中率、API 调用数、本次花费、余额 |
+| `tier` | 当前档位：高峰 / 空闲；临近切换时附倒计时 |
 
 ### 配色
 
