@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 import { loadConfig } from './config.js';
 import { resolvePricing } from './pricing/index.js';
@@ -19,15 +20,6 @@ import { resolveBalance, refreshBalance } from './balance.js';
 import { renderStatusline } from './statusline.js';
 import { renderReport } from './report.js';
 import { runSetup } from './setup.js';
-
-// A status line is written to a pipe that the parent may close at any moment —
-// a terminal resize or a restarted status line is enough. Without this, Node
-// raises an unhandled 'error' event and dumps a stack trace into the very row
-// the status line occupies.
-process.stdout.on('error', (error) => {
-  if (error && error.code === 'EPIPE') process.exit(0);
-  throw error;
-});
 
 function readStdin() {
   try {
@@ -256,21 +248,39 @@ export async function main(argv = process.argv.slice(2)) {
   }
 }
 
-main()
-  .then((output) => {
-    if (output) process.stdout.write(output);
-  })
-  .catch((error) => {
-    // The status line must degrade, not disappear.
-    try {
-      process.stdout.write('cc-ctx ⚠');
-    } catch {
-      /* nothing else we can do */
-    }
-    if (process.env.CC_CTX_DEBUG) {
-      process.stderr.write(`${error?.stack || error}\n`);
-    }
-    process.exitCode = 0;
+// Run the CLI only when this file is executed directly, never when it is
+// imported (e.g. by the tests). `process.argv[1]` is the script path for a
+// direct run, and it is exactly what `balance-refresh` / `remote-refresh`
+// spawn, so the guard passes for those children too.
+const isDirectRun =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  // A status line is written to a pipe that the parent may close at any moment —
+  // a terminal resize or a restarted status line is enough. Without this, Node
+  // raises an unhandled 'error' event and dumps a stack trace into the very row
+  // the status line occupies.
+  process.stdout.on('error', (error) => {
+    if (error && error.code === 'EPIPE') process.exit(0);
+    throw error;
   });
+
+  main()
+    .then((output) => {
+      if (output) process.stdout.write(output);
+    })
+    .catch((error) => {
+      // The status line must degrade, not disappear.
+      try {
+        process.stdout.write('cc-ctx ⚠');
+      } catch {
+        /* nothing else we can do */
+      }
+      if (process.env.CC_CTX_DEBUG) {
+        process.stderr.write(`${error?.stack || error}\n`);
+      }
+      process.exitCode = 0;
+    });
+}
 
 export { parseArgs, USAGE };
