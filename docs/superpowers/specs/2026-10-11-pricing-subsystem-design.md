@@ -63,7 +63,7 @@
 ```
 src/pricing/                 ← 价格子系统，只依赖 node 内置模块
   index.js      对外入口：loadProviders(cfg) / resolvePricing(cfg, modelId)
-  provider.js   读 + 校验供应商 JSON；模型 id 归一化；精确 / 别名 / 通配匹配
+  provider.js   读 + 校验供应商 JSON；模型 id 归一化；精确匹配（含别名）
   schedule.js   时段引擎：buildSchedule() / tierAt() / nextTransition()
   calendar.js   日历：内置+远程+用户合并、区间展开、内容指纹、远程格式适配
   remote.js     远程抓取与缓存（供后台子进程调用）
@@ -123,8 +123,8 @@ nextTransition(instant, schedule)  → { at: Date, tier: 'peak' | 'offPeak' } | 
 
 取舍：
 
-- **`aliases` 而非把 flash 价目表抄三遍**：官方写明旧名仍在用且同价，显式声明别名关系比通配更安全。
-- **不写 `"deepseek-*"` 兜底通配**：将来出新模型时，兜底会让它**静默地**按 Flash 计价——那正是本项目当初要修的 bug。匹配不到就显示「无价目表」。通配能力保留，但只在使用方显式声明时生效。
+- **`aliases` 而非把 flash 价目表抄三遍**：官方写明旧名仍在用且同价，显式声明别名关系既准确又不必重复数字。
+- **只有精确匹配，没有通配**（2026-10-12 决定，原先保留的 `deepseek-*` 通配能力已移除）：通配是这里唯一能产出「静默算错」的机制——DeepSeek 出了新模型，`deepseek-*` 会让它悄悄按 Flash 的价计价，而那正是本项目当初要修的 bug。代价是多写几个模型名；收益是不存在算错却不报错的可能。匹配不到就显示「无价目表」。
 - **`cacheWrite` 与 input 同价**：DeepSeek 不单独计缓存写入（Claude Code 侧该字段恒为 0），写上只为四桶齐全时校验能通过。
 - **`offPeak` 可选**：缺省则按 `offPeakMultiplier` 折算。显式写出空闲价，是为了让 JSON 能直接对着官方价格表核对。
 
@@ -308,7 +308,7 @@ tier peak · 8m→off-peak           即将变便宜，颜色保持正常
 
 - `calendar.js`：区间展开、单日与区间混排、非法日期忽略、内容指纹随内容变化、holiday-cn 格式转换（`isOffDay` 双向）。
 - `schedule.js`：窗口含头不含尾；周末全天空闲；节假日全天空闲；**调休上班日按高峰**；跨年边界；未知/非法时间戳按高峰；`workdaysArePeak: false` 时退回官方字面口径；`nextTransition` 的正确性与边界（窗口内、窗口间隙、跨零点、跨假期、假期中）。
-- `provider.js`：精确匹配、别名匹配、通配匹配、最长模式优先、用户目录覆盖内置、四桶不全时整个模型作废、无匹配返回 null。
+- `provider.js`：精确匹配、别名匹配、用户目录覆盖内置、四桶不全时整个模型作废、无匹配返回 null、前缀相同但不完全相同的名字**不得**命中。
 - `pricing/index.js`：`resolvePricing` 端到端（含 `offPeak` 缺省时按 `offPeakMultiplier` 折算）。
 - `usage.js`：`costOf` 按两档价目表分别计价；缓存键随日历指纹失效、但**不**随价格变化失效。
 
